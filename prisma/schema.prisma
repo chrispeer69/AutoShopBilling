@@ -1,0 +1,291 @@
+// ShopDesk v2 — multi-tenant auto repair invoicing + CRM
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  TECH
+}
+
+enum DocKind {
+  ESTIMATE
+  WORKORDER
+  INVOICE
+}
+
+enum DocStatus {
+  DRAFT
+  SENT
+  APPROVED
+  DECLINED
+  CONVERTED
+  OPEN
+  PARTIAL
+  PAID
+  VOID
+}
+
+enum ItemType {
+  PART
+  LABOR
+  FEE
+}
+
+enum FollowUpStatus {
+  OPEN
+  DONE
+}
+
+model Shop {
+  id            String @id @default(cuid())
+  name          String
+  address       String @default("")
+  phone         String @default("")
+  email         String @default("")
+  taxRate       Float  @default(7.25)
+  laborRate     Int    @default(12000)
+  invoiceFooter String @default("Thank you for your business!")
+  suppliesPct      Float @default(0)
+  suppliesCapCents Int   @default(0)
+  partsMarkupPct   Float @default(40)
+  cardSurchargePct Float @default(0)
+  smtpHost    String @default("")
+  smtpPort    Int    @default(587)
+  smtpUser    String @default("")
+  smtpPassEnc String @default("")
+  smtpFrom    String @default("")
+  stripeSecretEnc        String @default("")
+  stripeWebhookSecretEnc String @default("")
+  twilioSid      String @default("")
+  twilioTokenEnc String @default("")
+  twilioFrom     String @default("")
+  createdAt DateTime @default(now())
+
+  users      User[]
+  customers  Customer[]
+  vehicles   Vehicle[]
+  docs       Doc[]
+  followUps  FollowUp[]
+  counters   DailyCounter[]
+  partItems  PartItem[]
+  cannedJobs CannedJob[]
+  auditLogs  AuditLog[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  shopId       String
+  shop         Shop     @relation(fields: [shopId], references: [id])
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(TECH)
+  createdAt    DateTime @default(now())
+
+  laborLines LineItem[]
+
+  @@index([shopId])
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id])
+  name      String
+  phone     String   @default("")
+  email     String   @default("")
+  address   String   @default("")
+  notes     String   @default("")
+  createdAt DateTime @default(now())
+
+  vehicles  Vehicle[]
+  docs      Doc[]
+  followUps FollowUp[]
+
+  @@index([shopId])
+}
+
+model Vehicle {
+  id         String   @id @default(cuid())
+  shopId     String
+  shop       Shop     @relation(fields: [shopId], references: [id])
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  year       String   @default("")
+  make       String   @default("")
+  model      String   @default("")
+  engine     String   @default("")
+  vin        String   @default("")
+  plate      String   @default("")
+  mileage    Int?
+  notes      String   @default("")
+  createdAt  DateTime @default(now())
+
+  docs      Doc[]
+  followUps FollowUp[]
+
+  @@index([shopId])
+  @@index([customerId])
+}
+
+model Doc {
+  id          String    @id @default(cuid())
+  shopId      String
+  shop        Shop      @relation(fields: [shopId], references: [id])
+  kind        DocKind
+  number      String
+  status      DocStatus @default(DRAFT)
+  customerId  String
+  customer    Customer  @relation(fields: [customerId], references: [id])
+  vehicleId   String?
+  vehicle     Vehicle?  @relation(fields: [vehicleId], references: [id])
+  date        DateTime  @default(now())
+  mileage     Int?
+  notes       String    @default("")
+  taxEnabled Boolean @default(false)
+  taxRate    Float   @default(0)
+  suppliesEnabled  Boolean @default(false)
+  suppliesPct      Float   @default(0)
+  suppliesCapCents Int     @default(0)
+  publicToken  String    @unique @default(cuid())
+  approvedName String    @default("")
+  approvedAt   DateTime?
+  approvedIp   String    @default("")
+  signaturePng String    @default("")
+  declineNote  String    @default("")
+  paymentLinkUrl String @default("")
+  convertedFromId String?   @unique
+  convertedFrom   Doc?      @relation("Conversion", fields: [convertedFromId], references: [id], onDelete: SetNull)
+  convertedTo     Doc?      @relation("Conversion")
+  emailedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  items    LineItem[]
+  payments Payment[]
+
+  @@unique([shopId, number])
+  @@index([shopId, kind])
+  @@index([customerId])
+}
+
+model LineItem {
+  id             String   @id @default(cuid())
+  docId          String
+  doc            Doc      @relation(fields: [docId], references: [id], onDelete: Cascade)
+  type           ItemType @default(PART)
+  description    String
+  partNumber     String   @default("")
+  qty            Float    @default(1)
+  unitPriceCents Int      @default(0)
+  costCents      Int?
+  techId         String?
+  tech           User?    @relation(fields: [techId], references: [id], onDelete: SetNull)
+  declined       Boolean  @default(false)
+  sort           Int      @default(0)
+
+  @@index([docId])
+}
+
+model Payment {
+  id          String   @id @default(cuid())
+  docId       String
+  doc         Doc      @relation(fields: [docId], references: [id], onDelete: Cascade)
+  amountCents Int
+  method      String   @default("Cash")
+  date        DateTime @default(now())
+  note        String   @default("")
+  stripeRef   String   @default("")
+
+  @@index([docId])
+}
+
+model PartItem {
+  id          String   @id @default(cuid())
+  shopId      String
+  shop        Shop     @relation(fields: [shopId], references: [id])
+  partNumber  String
+  description String
+  costCents   Int      @default(0)
+  priceCents  Int      @default(0)
+  qtyOnHand   Int?
+  createdAt   DateTime @default(now())
+
+  @@unique([shopId, partNumber])
+  @@index([shopId])
+}
+
+model CannedJob {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id])
+  name      String
+  createdAt DateTime @default(now())
+
+  items CannedJobItem[]
+
+  @@index([shopId])
+}
+
+model CannedJobItem {
+  id             String    @id @default(cuid())
+  jobId          String
+  job            CannedJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  type           ItemType  @default(PART)
+  description    String
+  partNumber     String    @default("")
+  qty            Float     @default(1)
+  unitPriceCents Int       @default(0)
+  costCents      Int?
+  sort           Int       @default(0)
+
+  @@index([jobId])
+}
+
+model FollowUp {
+  id         String         @id @default(cuid())
+  shopId     String
+  shop       Shop           @relation(fields: [shopId], references: [id])
+  customerId String
+  customer   Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  vehicleId  String?
+  vehicle    Vehicle?       @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  dueDate    DateTime
+  note       String
+  status     FollowUpStatus @default(OPEN)
+  createdAt  DateTime       @default(now())
+
+  @@index([shopId, status])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [id])
+  userId    String   @default("")
+  userName  String   @default("")
+  action    String
+  entity    String   @default("")
+  entityId  String   @default("")
+  meta      String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([shopId, createdAt])
+}
+
+model DailyCounter {
+  id      String  @id @default(cuid())
+  shopId  String
+  shop    Shop    @relation(fields: [shopId], references: [id])
+  kind    DocKind
+  dateKey String
+  seq     Int     @default(0)
+
+  @@unique([shopId, kind, dateKey])
+}
